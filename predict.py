@@ -8,6 +8,7 @@ from pathlib import Path
 import glob
 from datetime import datetime
 import time
+import torch
 
 from cog import BasePredictor, Input, Path
 
@@ -44,12 +45,22 @@ class Predictor(BasePredictor):
         # Ensure model cache directory exists
         os.makedirs(MODEL_CACHE, exist_ok=True)
 
+        # Detect number of available GPUs
+        self.num_gpus = torch.cuda.device_count()
+        print(f"[INFO] Detected {self.num_gpus} available GPU(s)")
+
         # Attempt custom tar download
+        # TEMPORARY CHANGE: Only download the fast (1.3B) model to save space
+        # Original model files list:
+        # model_files = [
+        #     "Wan2.1-T2V-14B.tar",
+        #     "Wan2.1-T2V-1.3B.tar",
+        #     "Wan2.1-I2V-14B-720P.tar",
+        #     "Wan2.1-I2V-14B-480P.tar",
+        # ]
         model_files = [
-            "Wan2.1-T2V-14B.tar",
-            "Wan2.1-T2V-1.3B.tar",
-            "Wan2.1-I2V-14B-720P.tar",
-            "Wan2.1-I2V-14B-480P.tar",
+            "Wan2.1-T2V-1.3B.tar",  # Fast T2V model only
+            "Wan2.1-I2V-14B-480P.tar",  # SD resolution I2V model only
         ]
         if not os.path.exists(MODEL_CACHE):
             os.makedirs(MODEL_CACHE)
@@ -63,7 +74,8 @@ class Predictor(BasePredictor):
         # Create model cache directory
         os.makedirs(MODEL_CACHE, exist_ok=True)
 
-        # Define model paths
+        # Define model paths - keeping all paths defined even if we're not using them now
+        # so we can easily restore functionality later
         self.model_paths = {
             "t2v-14B": f"{MODEL_CACHE}/Wan2.1-T2V-14B",
             "t2v-1.3B": f"{MODEL_CACHE}/Wan2.1-T2V-1.3B",
@@ -76,33 +88,45 @@ class Predictor(BasePredictor):
         prompt: str = Input(
             description="Text prompt describing what you want to generate"
         ),
+        # TEMPORARY CHANGE: Restricting mode options to remove text-to-image
+        # Original mode definition:
+        # mode: str = Input(
+        #     description="Generation mode: text-to-video, image-to-video, or text-to-image",
+        #     choices=["text-to-video", "image-to-video", "text-to-image"],
+        #     default="text-to-video",
+        # ),
         mode: str = Input(
-            description="Generation mode: text-to-video, image-to-video, or text-to-image",
-            choices=["text-to-video", "image-to-video", "text-to-image"],
+            description="Generation mode: text-to-video or image-to-video",
+            choices=["text-to-video", "image-to-video"],
             default="text-to-video",
         ),
         image: Path = Input(
             description="Input image for image-to-video generation (only required for image-to-video mode)",
             default=None,
         ),
-        model_quality: str = Input(
-            description="Model quality (higher quality is slower but better results)",
-            choices=["standard", "fast"],
-            default="fast",
-        ),
-        resolution: str = Input(
-            description="Output resolution",
-            choices=[
-                "HD (1280×720)",
-                "SD (832×480)",
-                "Square (960×960)",
-                "Portrait HD (720×1280)",
-                "Widescreen (1088×832)",
-                "Portrait (832×1088)",
-                "Square HD (1024×1024)",
-            ],
-            default="SD (832×480)",
-        ),
+        # TEMPORARY CHANGE: Removing model quality option to enforce fast mode only
+        # Original model_quality definition:
+        # model_quality: str = Input(
+        #     description="Model quality (higher quality is slower but better results)",
+        #     choices=["standard", "fast"],
+        #     default="fast",
+        # ),
+        
+        # TEMPORARY CHANGE: Restricting resolution to SD only
+        # Original resolution definition:
+        # resolution: str = Input(
+        #     description="Output resolution",
+        #     choices=[
+        #         "HD (1280×720)",
+        #         "SD (832×480)",
+        #         "Square (960×960)",
+        #         "Portrait HD (720×1280)",
+        #         "Widescreen (1088×832)",
+        #         "Portrait (832×1088)",
+        #         "Square HD (1024×1024)",
+        #     ],
+        #     default="SD (832×480)",
+        # ),
         seed: int = Input(
             description="Random seed for reproducible results (leave blank for random)",
             default=None,
@@ -120,9 +144,11 @@ class Predictor(BasePredictor):
         mode_map = {
             "text-to-video": "t2v",
             "image-to-video": "i2v",
-            "text-to-image": "t2i",
+            # TEMPORARY CHANGE: Removed t2i mode mapping
+            # "text-to-image": "t2i",
         }
 
+        # TEMPORARY CHANGE: We're only using SD resolution, but keeping the full map for reference
         resolution_map = {
             "HD (1280×720)": "1280*720",
             "SD (832×480)": "832*480",
@@ -133,12 +159,18 @@ class Predictor(BasePredictor):
             "Square HD (1024×1024)": "1024*1024",
         }
 
+        # TEMPORARY CHANGE: Hardcoded SD resolution
+        internal_resolution = "832*480"  # SD resolution
+
         model_quality_map = {"standard": "14B", "fast": "1.3B"}
+        
+        # TEMPORARY CHANGE: Hardcoded fast model
+        model_size = "1.3B"  # Fast model
 
         # Convert user-friendly inputs to internal values
         internal_mode = mode_map[mode]
-        internal_resolution = resolution_map[resolution]
-        model_size = model_quality_map[model_quality]
+        # internal_resolution is now hardcoded above
+        # model_size is now hardcoded above
 
         # Validate inputs
         if internal_mode == "i2v" and image is None:
@@ -150,22 +182,28 @@ class Predictor(BasePredictor):
         # Determine the task based on mode and model size
         if internal_mode == "t2v":
             task = f"t2v-{model_size}"
-            if model_size == "1.3B" and internal_resolution not in ["832*480"]:
-                print(
-                    "Note: Fast model (1.3B) is optimized for SD resolution. Switching to 832*480."
-                )
-                internal_resolution = "832*480"
+            # TEMPORARY CHANGE: Resolution check no longer needed as we only use SD
+            # if model_size == "1.3B" and internal_resolution not in ["832*480"]:
+            #     print(
+            #         "Note: Fast model (1.3B) is optimized for SD resolution. Switching to 832*480."
+            #     )
+            #     internal_resolution = "832*480"
             ckpt_dir = self.model_paths[task]
         elif internal_mode == "i2v":
-            if internal_resolution in ["1280*720", "960*960", "720*1280"]:
-                task = "i2v-14B-720P"
-                ckpt_dir = self.model_paths[task]
-            else:
-                task = "i2v-14B-480P"
-                ckpt_dir = self.model_paths[task]
-        elif internal_mode == "t2i":
-            task = f"t2i-{model_size}"
-            ckpt_dir = self.model_paths[f"t2v-{model_size}"]  # T2I uses T2V model
+            # TEMPORARY CHANGE: Always use 480P model for I2V tasks (SD resolution)
+            # Original I2V task resolution selection:
+            # if internal_resolution in ["1280*720", "960*960", "720*1280"]:
+            #     task = "i2v-14B-720P"
+            #     ckpt_dir = self.model_paths[task]
+            # else:
+            #     task = "i2v-14B-480P"
+            #     ckpt_dir = self.model_paths[task]
+            task = "i2v-14B-480P"
+            ckpt_dir = self.model_paths[task]
+        # TEMPORARY CHANGE: Removed T2I case
+        # elif internal_mode == "t2i":
+        #     task = f"t2i-{model_size}"
+        #     ckpt_dir = self.model_paths[f"t2v-{model_size}"]  # T2I uses T2V model
         else:
             raise ValueError(f"Invalid mode: {internal_mode}")
 
@@ -188,53 +226,100 @@ class Predictor(BasePredictor):
                     f"huggingface-cli download Wan-AI/Wan2.1-{task} --local-dir {ckpt_dir}"
                 )
 
-        # Build command for local generation
-        cmd = ["python", "generate.py"]
-        cmd.extend(["--task", task])
-        cmd.extend(["--size", internal_resolution])
-        cmd.extend(["--ckpt_dir", ckpt_dir])
-        cmd.extend(["--prompt", prompt])
-        cmd.extend(["--base_seed", str(actual_seed)])
+        # Determine multi-GPU strategy based on available GPUs and model size
+        # For models with size 14B, prefer ulysses_size parallelism
+        # For models with size 1.3B, prefer ring_size parallelism
+        use_distributed = self.num_gpus > 1
+        
+        if use_distributed:
+            print(f"[INFO] Using {self.num_gpus} GPUs for distributed inference")
+            
+            # For 14B models, use ulysses parallelism (better for large models)
+            # For 1.3B models, use ring parallelism (better for smaller models)
+            if model_size == "14B":
+                ulysses_size = self.num_gpus
+                ring_size = 1
+            else:
+                # For 1.3B model, ring attention works better
+                ulysses_size = 1
+                ring_size = self.num_gpus
+                
+            print(f"[INFO] Distribution strategy: ulysses_size={ulysses_size}, ring_size={ring_size}")
+            
+            # Start torchrun command for distributed processing
+            cmd = ["torchrun", f"--nproc_per_node={self.num_gpus}", "generate.py"]
+            cmd.extend(["--task", task])
+            cmd.extend(["--size", internal_resolution])
+            cmd.extend(["--ckpt_dir", ckpt_dir])
+            cmd.extend(["--prompt", prompt])
+            cmd.extend(["--base_seed", str(actual_seed)])
+            
+            # Add FSDP (Fully Sharded Data Parallel) arguments for distributed processing
+            cmd.extend(["--dit_fsdp"])
+            cmd.extend(["--t5_fsdp"])
+            
+            # Add distribution strategy settings
+            cmd.extend(["--ulysses_size", str(ulysses_size)])
+            cmd.extend(["--ring_size", str(ring_size)])
+            
+            # Add image path for image-to-video
+            if internal_mode == "i2v" and image is not None:
+                cmd.extend(["--image", str(image)])
+                
+            # Optimize model parameters based on task
+            if task == "t2v-1.3B":
+                cmd.extend(["--sample_guide_scale", str(sample_guide_scale)])
+                cmd.extend(["--sample_shift", str(sample_shift)])
+                cmd.extend(["--sample_steps", "30"])  # Faster generation for 1.3B model
+        else:
+            print("[INFO] Using single GPU for inference")
+            
+            # Build command for single-GPU generation
+            cmd = ["python", "generate.py"]
+            cmd.extend(["--task", task])
+            cmd.extend(["--size", internal_resolution])
+            cmd.extend(["--ckpt_dir", ckpt_dir])
+            cmd.extend(["--prompt", prompt])
+            cmd.extend(["--base_seed", str(actual_seed)])
 
-        # Add image path for I2V
-        if internal_mode == "i2v" and image is not None:
-            cmd.extend(["--image", str(image)])
+            # Add image path for image-to-video
+            if internal_mode == "i2v" and image is not None:
+                cmd.extend(["--image", str(image)])
 
-        # Add optimization flags
-        if memory_optimization:
-            cmd.append("--offload_model")
-            cmd.append("True")
-            cmd.append("--t5_cpu")
+            # Add optimization flags for single GPU
+            if memory_optimization:
+                cmd.append("--offload_model")
+                cmd.append("True")
+                cmd.append("--t5_cpu")
 
-        # Add sample parameters for T2V-1.3B
-        if task == "t2v-1.3B":
-            cmd.extend(["--sample_guide_scale", str(sample_guide_scale)])
-            cmd.extend(["--sample_shift", str(sample_shift)])
-            # Add steps parameter for faster generation
-            cmd.extend(["--sample_steps", "30"])
+            # Add sample parameters for T2V-1.3B
+            if task == "t2v-1.3B":
+                cmd.extend(["--sample_guide_scale", str(sample_guide_scale)])
+                cmd.extend(["--sample_shift", str(sample_shift)])
+                cmd.extend(["--sample_steps", "30"])
 
         # Execute the command
-        print(f"Running command: {' '.join(cmd)}")
-
-        # Use subprocess.call to run the command and show output in real-time
+        print(f"[INFO] Running command: {' '.join(cmd)}")
         result = subprocess.call(cmd)
 
         if result != 0:
             raise RuntimeError(f"Generation failed with exit code {result}")
 
-        # Since we're not capturing output, we need to find the output file differently
-        # We can use a predictable output pattern based on the task and timestamp
-
         # Get the current date in the format used by generate.py
         formatted_time = datetime.now().strftime("%Y%m%d")
 
         # Look for recently created output files
-        if internal_mode in ["t2v", "i2v"]:
-            pattern = f"{task}*{formatted_time}*.mp4"
-            output_files = glob.glob(pattern)
-        else:  # t2i
-            pattern = f"{task}*{formatted_time}*.png"
-            output_files = glob.glob(pattern)
+        # TEMPORARY CHANGE: No longer looking for t2i output files
+        # Original pattern lookup:
+        # if internal_mode in ["t2v", "i2v"]:
+        #     pattern = f"{task}*{formatted_time}*.mp4"
+        #     output_files = glob.glob(pattern)
+        # else:  # t2i
+        #     pattern = f"{task}*{formatted_time}*.png"
+        #     output_files = glob.glob(pattern)
+        
+        pattern = f"{task}*{formatted_time}*.mp4"
+        output_files = glob.glob(pattern)
 
         if not output_files:
             raise RuntimeError(
@@ -243,5 +328,6 @@ class Predictor(BasePredictor):
 
         # Sort by modification time to get the most recent file
         output_path = sorted(output_files, key=os.path.getmtime)[-1]
+        print(f"[INFO] Generated output saved to: {output_path}")
 
         return Path(output_path)
