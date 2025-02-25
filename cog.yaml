@@ -37,6 +37,7 @@ build:
 
   # commands run after the environment is setup
   run:
+    - curl -o /usr/local/bin/pget -L "https://github.com/replicate/pget/releases/download/v0.9.1/pget_linux_x86_64" && chmod +x /usr/local/bin/pget
     - pip install flash_attn --no-build-isolation
     - pip install xfuser>=0.4.1
     - pip install huggingface_hub[cli]
