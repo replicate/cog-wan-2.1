@@ -198,8 +198,10 @@ class Predictor(BasePredictor):
             # else:
             #     task = "i2v-14B-480P"
             #     ckpt_dir = self.model_paths[task]
-            task = "i2v-14B-480P"
-            ckpt_dir = self.model_paths[task]
+            
+            # Fix: Use correct task name for generate.py but keep the right checkpoint
+            task = "i2v-14B"  # This is what generate.py expects
+            ckpt_dir = self.model_paths["i2v-14B-480P"]  # Still use the SD resolution checkpoint
         # TEMPORARY CHANGE: Removed T2I case
         # elif internal_mode == "t2i":
         #     task = f"t2i-{model_size}"
@@ -330,4 +332,30 @@ class Predictor(BasePredictor):
         output_path = sorted(output_files, key=os.path.getmtime)[-1]
         print(f"[INFO] Generated output saved to: {output_path}")
 
-        return Path(output_path)
+        # Add FFmpeg post-processing to ensure browser compatibility
+        browser_compatible_path = f"{os.path.splitext(output_path)[0]}_web.mp4"
+        print(f"[INFO] Converting video to web-compatible format: {browser_compatible_path}")
+        
+        # FFmpeg command to create web-compatible MP4
+        # -movflags +faststart puts the metadata at the beginning of the file for streaming
+        # -pix_fmt yuv420p ensures color format compatibility
+        # -vcodec libx264 uses the widely supported H.264 codec
+        # -profile:v baseline -level 3.0 ensures maximum compatibility
+        ffmpeg_cmd = [
+            "ffmpeg", "-i", output_path,
+            "-movflags", "+faststart",
+            "-pix_fmt", "yuv420p",
+            "-vcodec", "libx264",
+            "-profile:v", "baseline",
+            "-level", "3.0",
+            "-y",  # Overwrite output file if it exists
+            browser_compatible_path
+        ]
+        
+        try:
+            print(f"[INFO] Running FFmpeg: {' '.join(ffmpeg_cmd)}")
+            subprocess.check_call(ffmpeg_cmd)
+            return Path(browser_compatible_path)
+        except subprocess.CalledProcessError as e:
+            print(f"[WARNING] FFmpeg conversion failed: {e}. Falling back to original file.")
+            return Path(output_path)
