@@ -1,0 +1,45 @@
+# Configuration for Cog ⚙️
+# Reference: https://cog.run/yaml
+
+build:
+  # set to true if your model requires a GPU
+  gpu: true
+  cuda: "12.4"
+
+  # a list of ubuntu apt packages to install
+  system_packages:
+    - "libgl1-mesa-glx"
+    - "libglib2.0-0"
+
+  # python version in the form '3.11' or '3.11.4'
+  python_version: "3.10"
+
+  # a list of packages in the format <package-name>==<version>
+  python_packages:
+    - "torch==2.6.0"
+    - "torchvision==0.21.0"
+    - "opencv-python==4.11.0.86"
+    - "diffusers==0.32.2"
+    - "transformers==4.49.0"
+    - "tokenizers==0.21.0"
+    - "accelerate==1.4.0"
+    - "tqdm==4.67.1"
+    - "imageio==2.37.0"
+    - "easydict==1.13"
+    - "ftfy==6.3.1"
+    - "dashscope==1.22.1"
+    - "imageio-ffmpeg==0.6.0"
+    # - "flash_attn==2.7.4.post1"
+    - "numpy==1.24.4"
+    - "xfuser==0.4.1"
+    - "huggingface_hub==0.29.1"
+    - "requests==2.32.3"
+
+  # commands run after the environment is setup
+  run:
+    - pip install flash_attn --no-build-isolation
+    - pip install xfuser>=0.4.1
+    - pip install huggingface_hub[cli]
+
+# predict.py defines how predictions are run on your model
+predict: "predict.py:Predictor"
