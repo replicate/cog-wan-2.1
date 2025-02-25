@@ -4,7 +4,6 @@
 import os
 import random
 import subprocess
-from pathlib import Path
 import glob
 from datetime import datetime
 import time
@@ -88,20 +87,8 @@ class Predictor(BasePredictor):
         prompt: str = Input(
             description="Text prompt describing what you want to generate"
         ),
-        # TEMPORARY CHANGE: Restricting mode options to remove text-to-image
-        # Original mode definition:
-        # mode: str = Input(
-        #     description="Generation mode: text-to-video, image-to-video, or text-to-image",
-        #     choices=["text-to-video", "image-to-video", "text-to-image"],
-        #     default="text-to-video",
-        # ),
-        mode: str = Input(
-            description="Generation mode: text-to-video or image-to-video",
-            choices=["text-to-video", "image-to-video"],
-            default="text-to-video",
-        ),
         image: Path = Input(
-            description="Input image for image-to-video generation (only required for image-to-video mode)",
+            description="Input image for image-to-video generation (optional, if provided will use image-to-video mode)",
             default=None,
         ),
         # TEMPORARY CHANGE: Removing model quality option to enforce fast mode only
@@ -127,6 +114,12 @@ class Predictor(BasePredictor):
         #     ],
         #     default="SD (832×480)",
         # ),
+        sample_steps: int = Input(
+            description="Number of sampling steps (higher = better quality but slower)",
+            default=30,
+            ge=10,  # Minimum value of 10 steps
+            le=30,  # Maximum value of 30 steps
+        ),
         seed: int = Input(
             description="Random seed for reproducible results (leave blank for random)",
             default=None,
@@ -135,7 +128,7 @@ class Predictor(BasePredictor):
         """Run a single prediction on the model"""
 
         # Set default values for removed advanced parameters
-        memory_optimization = True
+        memory_optimization = False
         sample_guide_scale = 6.0
         sample_shift = 8
         use_prompt_extension = False
@@ -167,10 +160,13 @@ class Predictor(BasePredictor):
         # TEMPORARY CHANGE: Hardcoded fast model
         model_size = "1.3B"  # Fast model
 
-        # Convert user-friendly inputs to internal values
-        internal_mode = mode_map[mode]
-        # internal_resolution is now hardcoded above
-        # model_size is now hardcoded above
+        # Automatically infer mode based on image presence
+        if image is not None:
+            internal_mode = "i2v"
+            print(f"[INFO] Image provided, automatically using image-to-video mode")
+        else:
+            internal_mode = "t2v"
+            print(f"[INFO] No image provided, automatically using text-to-video mode")
 
         # Validate inputs
         if internal_mode == "i2v" and image is None:
@@ -272,7 +268,7 @@ class Predictor(BasePredictor):
             if task == "t2v-1.3B":
                 cmd.extend(["--sample_guide_scale", str(sample_guide_scale)])
                 cmd.extend(["--sample_shift", str(sample_shift)])
-                cmd.extend(["--sample_steps", "30"])  # Faster generation for 1.3B model
+                cmd.extend(["--sample_steps", str(sample_steps)])
         else:
             print("[INFO] Using single GPU for inference")
             
@@ -298,7 +294,7 @@ class Predictor(BasePredictor):
             if task == "t2v-1.3B":
                 cmd.extend(["--sample_guide_scale", str(sample_guide_scale)])
                 cmd.extend(["--sample_shift", str(sample_shift)])
-                cmd.extend(["--sample_steps", "30"])
+                cmd.extend(["--sample_steps", str(sample_steps)])
 
         # Execute the command
         print(f"[INFO] Running command: {' '.join(cmd)}")
@@ -308,54 +304,37 @@ class Predictor(BasePredictor):
             raise RuntimeError(f"Generation failed with exit code {result}")
 
         # Get the current date in the format used by generate.py
-        formatted_time = datetime.now().strftime("%Y%m%d")
+        formatted_time = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-        # Look for recently created output files
-        # TEMPORARY CHANGE: No longer looking for t2i output files
-        # Original pattern lookup:
-        # if internal_mode in ["t2v", "i2v"]:
-        #     pattern = f"{task}*{formatted_time}*.mp4"
-        #     output_files = glob.glob(pattern)
-        # else:  # t2i
-        #     pattern = f"{task}*{formatted_time}*.png"
-        #     output_files = glob.glob(pattern)
-        
+        # Look for recently created output files with the proper pattern
         pattern = f"{task}*{formatted_time}*.mp4"
         output_files = glob.glob(pattern)
 
         if not output_files:
-            raise RuntimeError(
-                f"Could not find generated output file matching pattern: {pattern}"
-            )
+            # If no files found with today's date, use a more general pattern as fallback
+            fallback_pattern = f"{task}*.mp4"
+            output_files = glob.glob(fallback_pattern)
+            if not output_files:
+                raise RuntimeError(
+                    f"Could not find generated output file matching pattern: {pattern} or {fallback_pattern}"
+                )
+            print(f"[INFO] Using fallback pattern to find output file: {fallback_pattern}")
 
         # Sort by modification time to get the most recent file
         output_path = sorted(output_files, key=os.path.getmtime)[-1]
         print(f"[INFO] Generated output saved to: {output_path}")
 
-        # Add FFmpeg post-processing to ensure browser compatibility
-        browser_compatible_path = f"{os.path.splitext(output_path)[0]}_web.mp4"
-        print(f"[INFO] Converting video to web-compatible format: {browser_compatible_path}")
-        
-        # FFmpeg command to create web-compatible MP4
-        # -movflags +faststart puts the metadata at the beginning of the file for streaming
-        # -pix_fmt yuv420p ensures color format compatibility
-        # -vcodec libx264 uses the widely supported H.264 codec
-        # -profile:v baseline -level 3.0 ensures maximum compatibility
-        ffmpeg_cmd = [
-            "ffmpeg", "-i", output_path,
-            "-movflags", "+faststart",
-            "-pix_fmt", "yuv420p",
-            "-vcodec", "libx264",
-            "-profile:v", "baseline",
-            "-level", "3.0",
-            "-y",  # Overwrite output file if it exists
-            browser_compatible_path
-        ]
-        
-        try:
-            print(f"[INFO] Running FFmpeg: {' '.join(ffmpeg_cmd)}")
-            subprocess.check_call(ffmpeg_cmd)
-            return Path(browser_compatible_path)
-        except subprocess.CalledProcessError as e:
-            print(f"[WARNING] FFmpeg conversion failed: {e}. Falling back to original file.")
-            return Path(output_path)
+        # Create a simple, URL-safe filename based on the original
+        basename = os.path.basename(output_path)
+        # Make absolutely sure the filename is URL-safe by removing any potentially problematic characters
+        safe_basename = ''.join(c for c in basename if c.isalnum() or c in '._-')
+
+        # If the basename was modified to make it URL-safe, create a new file with the safe name
+        if safe_basename != basename:
+            safe_output_path = os.path.join(os.path.dirname(output_path), safe_basename)
+            print(f"[INFO] Renaming output to ensure URL-safe filename: {safe_output_path}")
+            os.rename(output_path, safe_output_path)
+            output_path = safe_output_path
+
+        # Simply return the output_path directly since videos are already web-compatible
+        return Path(output_path)
