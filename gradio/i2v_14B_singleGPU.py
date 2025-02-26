@@ -2,6 +2,7 @@
 import argparse
 import gc
 import os.path as osp
+import os
 import sys
 import warnings
 
@@ -10,7 +11,7 @@ import gradio as gr
 warnings.filterwarnings('ignore')
 
 # Model
-sys.path.insert(0, '/'.join(osp.realpath(__file__).split('/')[:-2]))
+sys.path.insert(0, os.path.sep.join(osp.realpath(__file__).split(os.path.sep)[:-2]))
 import wan
 from wan.configs import MAX_AREA_CONFIGS, WAN_CONFIGS
 from wan.utils.prompt_extend import DashScopePromptExpander, QwenPromptExpander

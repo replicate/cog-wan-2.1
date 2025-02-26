@@ -1,6 +1,7 @@
 # Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
 import argparse
 import os.path as osp
+import os
 import sys
 import warnings
 
@@ -9,7 +10,7 @@ import gradio as gr
 warnings.filterwarnings('ignore')
 
 # Model
-sys.path.insert(0, '/'.join(osp.realpath(__file__).split('/')[:-2]))
+sys.path.insert(0, os.path.sep.join(osp.realpath(__file__).split(os.path.sep)[:-2]))
 import wan
 from wan.configs import WAN_CONFIGS
 from wan.utils.prompt_extend import DashScopePromptExpander, QwenPromptExpander
@@ -45,7 +46,7 @@ def t2v_generation(txt2vid_prompt, resolution, sd_steps, guide_scale,
         guide_scale=guide_scale,
         n_prompt=n_prompt,
         seed=seed,
-        offload_model=False)
+        offload_model=True)
 
     cache_video(
         tensor=video[None],

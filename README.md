@@ -320,6 +320,8 @@ We test the computational efficiency of different **Wan2.1** models on different
 > (3) For the 1.3B model on a single 4090 GPU, set `--offload_model True --t5_cpu`;
 > (4) For all testings, no prompt extension was applied, meaning `--use_prompt_extend` was not enabled.
 
+> 💡Note: T2V-14B is slower than I2V-14B because the former samples 50 steps while the latter uses 40 steps.
+
 
 ## Community Contributions
 - [DiffSynth-Studio](https://github.com/modelscope/DiffSynth-Studio) provides more support for Wan, including video-to-video, FP8 quantization, VRAM optimization, LoRA training, and more. Please refer to [their examples](https://github.com/modelscope/DiffSynth-Studio/tree/main/examples/wanvideo).
