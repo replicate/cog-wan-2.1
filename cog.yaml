@@ -44,4 +44,6 @@ build:
     - pip install huggingface_hub[cli]
 
 # predict.py defines how predictions are run on your model
-predict: "predict.py:Predictor"
+predict: "predict-1.3b.py:Predictor"
+# predict: "predict-14b.py:Predictor"
+# predict: "predict.py:Predictor"

@@ -48,20 +48,27 @@ class Predictor(BasePredictor):
         self.num_gpus = torch.cuda.device_count()
         print(f"[INFO] Detected {self.num_gpus} available GPU(s)")
 
-        # List of all model files - will be downloaded on demand based on selected model
-        self.model_files = {
-            "t2v-1.3B": "Wan2.1-T2V-1.3B.tar",
-            "t2v-14B": "Wan2.1-T2V-14B.tar",
-            "i2v-14B-720P": "Wan2.1-I2V-14B-720P.tar",
-            "i2v-14B-480P": "Wan2.1-I2V-14B-480P.tar",
-        }
+        # Download only 14B models
+        model_files = [
+            "Wan2.1-T2V-14B.tar",
+            "Wan2.1-I2V-14B-720P.tar",
+            "Wan2.1-I2V-14B-480P.tar",
+        ]
+        
+        if not os.path.exists(MODEL_CACHE):
+            os.makedirs(MODEL_CACHE)
+        for model_file in model_files:
+            url = BASE_URL + model_file
+            filename = url.split("/")[-1]
+            dest_path = os.path.join(MODEL_CACHE, filename)
+            if not os.path.exists(dest_path.replace(".tar", "")):
+                download_weights(url, dest_path)
 
         # Create model cache directory
         os.makedirs(MODEL_CACHE, exist_ok=True)
 
-        # Define model paths for all variants
+        # Define 14B model paths
         self.model_paths = {
-            "t2v-1.3B": f"{MODEL_CACHE}/Wan2.1-T2V-1.3B",
             "t2v-14B": f"{MODEL_CACHE}/Wan2.1-T2V-14B",
             "i2v-14B-720P": f"{MODEL_CACHE}/Wan2.1-I2V-14B-720P",
             "i2v-14B-480P": f"{MODEL_CACHE}/Wan2.1-I2V-14B-480P",
@@ -76,47 +83,37 @@ class Predictor(BasePredictor):
             description="Input image for image-to-video generation (optional, if provided will use image-to-video mode)",
             default=None,
         ),
-        model_quality: str = Input(
-            description="Model quality - larger model has better quality but requires more GPU memory",
-            choices=["Standard (1.3B)", "High Quality (14B)"],
-            default="Standard (1.3B)",
-        ),
-        resolution: str = Input(
-            description="Output video resolution (some options only available with specific models)",
-            choices=[
-                # T2V-1.3B resolutions
-                "Landscape SD (832×480)",
-                "Portrait SD (480×832)",
-                "Square SD (624×624)",
-                "Wide SD (704×544)",
-                "Tall SD (544×704)",
-                # T2V/I2V-14B resolutions
-                "Landscape HD (1280×720)",
-                "Portrait HD (720×1280)",
-                "Widescreen HD (1088×832)",
-                "Portrait HD (832×1088)",
-                "Square HD (960×960)",
-                "Square HD+ (1024×1024)",
-            ],
-            default="Landscape SD (832×480)",
-        ),
+        # Commented out resolution selection for now - uncomment when ready to enable
+        # resolution: str = Input(
+        #     description="Output video resolution",
+        #     choices=[
+        #         "HD (1280×720)",
+        #         "SD (832×480)",
+        #         "Portrait HD (720×1280)",
+        #         "Widescreen (1088×832)",
+        #         "Portrait (832×1088)",
+        #         "Square (960×960)",
+        #         "Square HD (1024×1024)",
+        #     ],
+        #     default="HD (1280×720)",
+        # ),
         sample_steps: int = Input(
             description="Number of sampling steps (higher = better quality but slower)",
             default=50,  # Default for T2V is 50, for I2V is 40
-            ge=10,
-            le=50,
+            ge=10,  # Minimum value of 10 steps
+            le=50,  # Maximum value of 50 steps
         ),
         sample_guide_scale: float = Input(
             description="Classifier free guidance scale (higher values strengthen prompt adherence)",
-            default=6.0,  # Will be adjusted based on model
-            ge=0.0,
-            le=20.0,
+            default=5.0,  # Recommended value for 14B model
+            ge=0.0,  # Minimum value
+            le=20.0,  # Maximum value
         ),
         sample_shift: float = Input(
             description="Sampling shift factor for flow matching",
-            default=8.0,  # Will be adjusted based on model
-            ge=0.0,
-            le=20.0,
+            default=5.0,  # Default for 14B model
+            ge=0.0,  # Minimum value
+            le=10.0,  # Maximum value
         ),
         seed: int = Input(
             description="Random seed for reproducible results (leave blank for random)",
@@ -125,97 +122,48 @@ class Predictor(BasePredictor):
     ) -> Path:
         """Run a single prediction on the model"""
 
-        # Default optimization settings
+        # Set default values for parameters
         memory_optimization = False
 
-        # Parse model quality selection
-        model_size = "14B" if "High Quality" in model_quality else "1.3B"
-        
-        # Map resolution choices to internal format
-        resolution_map = {
-            # T2V-1.3B resolutions
-            "Landscape SD (832×480)": "832*480",
-            "Portrait SD (480×832)": "480*832",
-            "Square SD (624×624)": "624*624",
-            "Wide SD (704×544)": "704*544",
-            "Tall SD (544×704)": "544*704",
-            # T2V/I2V-14B resolutions
-            "Landscape HD (1280×720)": "1280*720",
-            "Portrait HD (720×1280)": "720*1280",
-            "Widescreen HD (1088×832)": "1088*832",
-            "Portrait HD (832×1088)": "832*1088",
-            "Square HD (960×960)": "960*960",
-            "Square HD+ (1024×1024)": "1024*1024",
-        }
-        
-        # Convert selected resolution to internal format
-        internal_resolution = resolution_map[resolution]
-        
-        # Check if the resolution is compatible with the selected model size
-        hd_resolutions = ["1280*720", "720*1280", "1088*832", "832*1088", "960*960", "1024*1024"]
-        
-        # If 1.3B model is selected, enforce SD resolution
-        if model_size == "1.3B" and internal_resolution in hd_resolutions:
-            print(f"[INFO] HD resolution {resolution} is not supported with 1.3B model. Switching to 'Landscape SD (832×480)'")
-            internal_resolution = "832*480"
-        
-        # Determine mode based on presence of image
+        # Commented out resolution mapping - uncomment when ready to enable resolution selection
+        # resolution_map = {
+        #     "HD (1280×720)": "1280*720",
+        #     "SD (832×480)": "832*480",
+        #     "Portrait HD (720×1280)": "720*1280",
+        #     "Widescreen (1088×832)": "1088*832",
+        #     "Portrait (832×1088)": "832*1088",
+        #     "Square (960×960)": "960*960",
+        #     "Square HD (1024×1024)": "1024*1024",
+        # }
+        # 
+        # # Convert selected resolution to internal format
+        # internal_resolution = resolution_map[resolution]
+
+        # Detect if we're doing image-to-video or text-to-video
         if image is not None:
-            # If image is provided, use I2V mode - only available with 14B model
-            if model_size == "1.3B":
-                print("[INFO] Image-to-video is only supported with 14B model. Switching to 14B model.")
-                model_size = "14B"
-            
             internal_mode = "i2v"
-            print(f"[INFO] Using image-to-video mode with {model_size} model at resolution {resolution}")
-            
-            # Default I2V parameters
-            if sample_steps == 50:  # If using default, adjust for I2V
-                sample_steps = 40  # I2V works better with 40 steps
-            
-            # Default I2V sampling parameters
-            if sample_guide_scale == 6.0:  # If using default from 1.3B
-                sample_guide_scale = 5.0  # Adjust to 14B default
-            
-            if sample_shift == 8.0:  # If using default from 1.3B
-                sample_shift = 5.0  # Adjust to 14B default for I2V
-                if internal_resolution in ["832*480", "480*832"]:
-                    sample_shift = 3.0  # Special case for SD resolution in I2V
+            # Hardcoded to SD resolution for now - using 480P model
+            internal_resolution = "832*480"  # SD resolution (was 1280*720)
+            print(f"[INFO] Using image-to-video mode with 14B model at SD resolution")
         else:
-            # Text-to-video mode
             internal_mode = "t2v"
-            print(f"[INFO] Using text-to-video mode with {model_size} model at resolution {resolution}")
-            
-            # Default T2V parameters
-            if model_size == "14B" and sample_guide_scale == 6.0:
-                sample_guide_scale = 5.0  # Adjust to 14B default
-                
-            if model_size == "14B" and sample_shift == 8.0:
-                sample_shift = 5.0  # Adjust to 14B default
-        
+            # Hardcoded to SD resolution for now
+            internal_resolution = "832*480"  # SD resolution (was 1280*720)
+            print(f"[INFO] Using text-to-video mode with 14B model at SD resolution")
+
         # Set random seed if not provided
         actual_seed = seed if seed is not None else random.randint(0, 2147483647)
-        
-        # Set task based on mode, model size, and resolution
+
+        # Set task based on mode and resolution
         if internal_mode == "t2v":
-            task = f"t2v-{model_size}"
-        else:  # i2v mode
-            # Determine which I2V model to use based on resolution
-            if internal_resolution in ["1280*720", "720*1280"]:
-                task = f"i2v-{model_size}-720P"
-            else:
-                task = f"i2v-{model_size}-480P"
-        
-        # Download model if needed
-        model_file = self.model_files[task]
-        url = BASE_URL + model_file
-        dest_path = os.path.join(MODEL_CACHE, model_file)
-        if not os.path.exists(dest_path.replace(".tar", "")):
-            download_weights(url, dest_path)
-            
-        # Get model path
-        ckpt_dir = self.model_paths[task]
-        
+            # T2V always uses 14B model
+            task = "t2v-14B"
+            ckpt_dir = self.model_paths[task]
+        else:
+            # I2V - hardcoded to 480P for now
+            task = "i2v-14B-480P"  # Always using 480P model regardless of resolution
+            ckpt_dir = self.model_paths[task]
+
         # Check if model exists
         if not os.path.exists(ckpt_dir) or not os.listdir(ckpt_dir):
             # Try to download the model one more time
@@ -234,25 +182,22 @@ class Predictor(BasePredictor):
                     f"Please download it manually using: "
                     f"huggingface-cli download Wan-AI/Wan2.1-{task} --local-dir {ckpt_dir}"
                 )
-        
-        # Determine multi-GPU strategy based on available GPUs and model size
+
+        # Determine multi-GPU strategy based on available GPUs
+        # For 14B model, ulysses_size parallelism is preferred
         use_distributed = self.num_gpus > 1
         
         if use_distributed:
             print(f"[INFO] Using {self.num_gpus} GPUs for distributed inference")
             
-            if model_size == "14B":
-                # For 14B model, ulysses attention works better with 4+ GPUs
-                if self.num_gpus >= 4:
-                    ulysses_size = self.num_gpus
-                    ring_size = 1
-                else:
-                    # With 2-3 GPUs, use a combination
-                    ulysses_size = 1
-                    ring_size = self.num_gpus
+            # For 14B model, ulysses attention works better
+            if self.num_gpus >= 4:
+                # With 4+ GPUs, use ulysses_size for 14B model
+                ulysses_size = self.num_gpus
+                ring_size = 1
             else:
-                # For 1.3B model, ring attention works better
-                ulysses_size = 1
+                # With 2-3 GPUs, use a combination
+                ulysses_size = 1 
                 ring_size = self.num_gpus
                 
             print(f"[INFO] Distribution strategy: ulysses_size={ulysses_size}, ring_size={ring_size}")
@@ -297,7 +242,7 @@ class Predictor(BasePredictor):
                 cmd.extend(["--image", str(image)])
 
             # Add optimization flags for single GPU (more important for 14B model)
-            if memory_optimization or model_size == "14B":
+            if memory_optimization:
                 cmd.append("--offload_model")
                 cmd.append("True")
                 cmd.append("--t5_cpu")
